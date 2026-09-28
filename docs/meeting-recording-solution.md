@@ -1,191 +1,234 @@
-# Meeting Recording → Transcript → Summary → KB
+# Meeting Recording → Transcript → Summary → Second Brain
 
-**Status:** Ideation / decision proposal
+**Status:** Ideation / decision proposal (v2, updated with the Yeaz landscape)
 **Date:** 2026-09-28
-**Goal:** Every relevant Yeaz meeting is recorded (with consent), transcribed, and summarized, and the summary lands in our knowledge base (KB) with no manual copy-paste. Raw recordings are offloaded and retained according to policy.
+**Goal:** Every relevant Yeaz meeting, online (Teams) or offline (in person, recorded on a laptop or phone), is transcribed and summarized. The summary lands as a Markdown note in our GitHub-backed Obsidian second brain, and action items land in Plane. Nobody has to copy-paste anything.
 
 ---
 
-## 1. Assumptions to confirm
+## 1. The Yeaz landscape (confirmed)
 
-These drive the make/buy decision. Please correct any that are wrong.
-
-| # | Assumption | Why it matters |
-|---|-----------|----------------|
-| A1 | Our main meeting platform is **Microsoft Teams** (plus some Google Meet/Zoom with externals) | Native options (Teams Premium / Copilot) may already cover 70% of the need |
-| A2 | The KB is **one of** Notion, Confluence, or SharePoint/OneDrive | Sets the integration target. Some vendors push natively to Notion/Confluence, others don't |
-| A3 | We're a German/EU company, and meetings are in **German and English** | GDPR, §201 StGB (recording the spoken word), works council (BetrVG §87(1) Nr. 6), and German-language transcription quality |
-| A4 | Roughly 30–100 employees record meetings | Per-seat SaaS cost vs. usage-based build cost |
-| A5 | We don't record HR, legal, or performance conversations | Scope and risk |
-
----
-
-## 2. What the solution has to do
-
-1. **Capture**: record internal and external calls (Teams, Meet, Zoom) and ideally in-person meetings too (mobile or desktop audio).
-2. **Transcribe**: accurate German/English transcription, speaker names (diarization), timestamps.
-3. **Summarize**: in a Yeaz template: TL;DR, decisions, action items (owner + due date), open questions, and tags (project, team, customer/partner).
-4. **Offload to the KB**: the summary and a transcript link are filed automatically in the right KB space/page, searchable and permissioned.
-5. **File lifecycle**: audio/video goes to cheap storage (SharePoint/Blob/S3) and is deleted after N days. Transcript and summary are kept.
-6. **Governance**: consent notice, opt-out, EU data residency, DPA (AVV), retention, access control that mirrors meeting attendees.
-7. **Nice to have**: action items pushed to our task tool, "ask the KB" Q&A across all meetings, a CRM/Klaviyo link for partner calls.
-
----
-
-## 3. Target architecture (applies to make and buy)
-
-```
- ┌───────────────┐   ┌───────────────┐   ┌──────────────────┐   ┌──────────────┐
- │   CAPTURE     │──▶│  TRANSCRIBE   │──▶│ SUMMARIZE/ENRICH │──▶│   OFFLOAD    │
- │ Teams/Meet/   │   │ STT + speaker │   │ LLM + Yeaz       │   │ KB page      │
- │ Zoom, bot or  │   │ diarization   │   │ template, tags,  │   │ + raw file → │
- │ botless app   │   │ (DE/EN)       │   │ action items     │   │ storage/TTL  │
- └───────────────┘   └───────────────┘   └──────────────────┘   └──────┬───────┘
-                                                                       │
-                                     ┌─────────────────────────────────┴───┐
-                                     │ Tasks tool · Search/Q&A over KB     │
-                                     └─────────────────────────────────────┘
-```
-
-The pipeline has four layers. **Capture and transcription are commodities.** **Summarization and KB offloading are Yeaz-specific** because they depend on our templates, taxonomy, and permissions. That split is the core of the recommendation below.
-
----
-
-## 4. Options
-
-### Option B1: Buy native (the platform we already pay for)
-
-| Product | What you get | Gaps |
+| Area | What we have | What it means for this design |
 |---|---|---|
-| **Microsoft Teams Premium / Microsoft 365 Copilot** (Intelligent Recap) | Recording and transcript stored in OneDrive/SharePoint automatically, AI recap with tasks, EU data boundary, no new vendor | Teams meetings only. Recap lives in Teams, not in our KB structure. Copilot costs about €30/user/month. Limited template control |
-| **Google Meet + Gemini "Take notes for me"** | Notes Doc in Drive, auto-shared with attendees | Meet only. Docs land in Drive, not the KB |
-| **Zoom AI Companion** | Included with paid Zoom. Summary and next steps | Zoom only. Export to KB is manual or via Zapier |
+| Knowledge base | `.md` second brain in **GitHub**, synced locally, edited in **Obsidian** | "Offloading to the KB" means **a git commit** of Markdown with YAML frontmatter and `[[wikilinks]]`. No SaaS notetaker writes to Git natively, so we'll build this last step ourselves whichever option we pick |
+| Tickets | **Plane** | Action items → Plane issues through the Plane REST API, ideally into **Intake** (triage) so they don't clutter projects |
+| Online meetings | **Microsoft Teams** | Teams' own recording and transcription gives capture and transcript for free. We pull them via **Microsoft Graph** |
+| Offline meetings | Laptop and mobile | We need a recorder app or a "drop the audio file here" flow, plus our own transcription |
+| Languages | **Dutch and English**, often mixed in one meeting | Transcription engine must handle `nl-NL`, `en-US` and switching between them. Benchmark this, it's the biggest quality risk |
+| Platform | **Microsoft/Azure** for infra and apps, **no Power Automate** | Use Azure Functions (or Logic Apps / Durable Functions), Blob Storage, Key Vault, Entra ID, Azure AI Speech |
+| Own development | **OutSystems** | Good fit for a mobile recorder app and a review/approve UI, if we want those |
 
-**Good fit if** A1 holds and the KB is SharePoint. The "offload to KB" step is then mostly done already.
+---
 
-### Option B2: Buy a dedicated AI notetaker (cross-platform)
+## 2. Requirements
 
-| Vendor | Notes relevant to Yeaz |
+1. **Capture**
+   - Online: Teams meetings, with recording and/or transcription switched on by policy or by the organizer.
+   - Offline: one tap on a phone, or one click on a laptop, with no internet needed while recording.
+2. **Transcribe**: Dutch, English and mixed. Speaker separation (diarization), timestamps.
+3. **Summarize**: Yeaz template covering TL;DR, decisions, action items (owner + due date), open questions and tags. Written in the meeting's main language, or always in one agreed language.
+4. **Offload to the second brain**: `Meetings/YYYY/MM/YYYY-MM-DD-<slug>.md` with frontmatter, and `[[wikilinks]]` to existing people and project notes. Committed to GitHub, then picked up by everyone's local sync.
+5. **Offload action items**: Plane issues that link back to the note. The Plane ID is written back into the note.
+6. **File lifecycle**: audio and video **never go into git**. They go to Blob or OneDrive with automatic deletion after N days. Text lives in git.
+7. **Governance**: AVG/GDPR, consent and transparency, works council (OR) consent, EU processing, and exclusion of sensitive meetings.
+
+---
+
+## 3. Target architecture
+
+```
+ ONLINE                                  OFFLINE
+ ┌───────────────────────┐              ┌──────────────────────────────────────────┐
+ │ Teams meeting         │              │ Laptop / phone recorder                  │
+ │ recording+transcript  │              │  a) OutSystems mobile app  → Blob upload │
+ │ (Teams-native)        │              │  b) any recorder → OneDrive "Meeting     │
+ └──────────┬────────────┘              │     Inbox" folder                        │
+            │ Graph change notification │  c) bought app (jamie/Plaud) → webhook   │
+            │ (transcript available)    └───────────────────┬──────────────────────┘
+            ▼                                               ▼
+ ┌─────────────────────────────────────────────────────────────────────────────────┐
+ │                YEAZ MEETING ROUTER  (Azure Functions, Durable orchestration)    │
+ │  1. Fetch transcript (Graph .vtt)       │  1. Azure AI Speech batch transcription│
+ │                                         │     (nl-NL/en-US, diarization)         │
+ │  2. Normalize → one transcript format (speakers, timestamps, language)          │
+ │  3. Summarize with Claude + Yeaz template (JSON out). Context: list of existing │
+ │     people/project notes from the repo so it can write correct [[wikilinks]]    │
+ │  4. Render Markdown note + frontmatter                                          │
+ │  5. Commit to GitHub second-brain repo (GitHub App)  ── or open a PR for review │
+ │  6. Create Plane issues (Intake) → write issue IDs back into the note           │
+ │  7. Move audio to Blob "raw" container (lifecycle rule: delete after 30–90 days)│
+ │  8. Notify organizer in Teams (link to note + Plane issues)                     │
+ └─────────────────────────────────────────────────────────────────────────────────┘
+            │                                   │
+            ▼                                   ▼
+   GitHub second brain  ──sync──▶  Obsidian     Plane (Intake → projects)
+```
+
+**Main point:** our KB is Git plus Markdown, so the most valuable part of the pipeline (steps 2–8) has to be built. What's left to decide is **capture and transcription**, and that's where the make-or-buy choice sits.
+
+---
+
+## 4. Make or buy, layer by layer
+
+### 4.1 Online capture and transcript (Teams)
+
+| Option | Verdict |
 |---|---|
-| **jamie** (German, botless) | Records locally on desktop and mobile (works in person too), no bot joins the call, EU-hosted, strong German. Integrations: Notion, Confluence, others via Zapier/webhooks |
-| **tl;dv** (EU/Germany) | Bot-based, EU hosting, strong on Meet/Zoom/Teams, native Notion/HubSpot/Slack integrations, templates |
-| **Fireflies.ai / Otter / Fathom / Read.ai** | Mature, many integrations, and APIs/webhooks (Fireflies has the richest). US-hosted by default, so check EU residency and the DPA |
-| **Granola** | Botless desktop notetaker. The user edits the notes and AI enhances them. Good UX, but lighter on org-wide governance |
-| **Notion AI Meeting Notes** | Only if the KB is Notion. Notes are created in the KB directly, which is the shortest path to "offloaded" |
+| **Teams-native recording and transcription + Graph API** (make the fetch) | ✅ **Recommended.** Already in our M365 licenses and supports Dutch. Graph `onlineMeeting` → `transcripts` / `recordings` with change notifications. No bot, no new vendor. *Check:* the Graph transcript/recording APIs require specific app permissions and application access policies, and some calls are metered or need licensing. Confirm this for our tenant |
+| Microsoft 365 Copilot / Teams Premium (intelligent recap) | ⚠️ Optional nice-to-have for users, not needed for the pipeline. Output stays in Teams and doesn't reach Git. Costs about €30/user/month for Copilot |
+| Third-party bot (tl;dv, Fireflies, Otter, Recall.ai) | ❌ Not needed. It duplicates what Teams already does and adds an extra processor under AVG |
 
-Typical cost is about €10–30 per user per month for business tiers with SSO, admin controls, and integrations (indicative, verify current pricing).
+### 4.2 Offline capture (laptop and mobile)
 
-**Good fit if** we use several meeting platforms or need in-person capture, and the vendor has a native connector to our KB.
+| Option | Make/Buy | Pros | Cons |
+|---|---|---|---|
+| **A. "Meeting Inbox" folder**: record with any app (Windows Sound Recorder, iOS Voice Memos, Android recorder) and save or share to a OneDrive/SharePoint folder. Graph change notification triggers the router | **Make (tiny)** | Days of work, zero new apps, works today | Manual step (share the file). Title and attendees missing unless the user renames the file or picks a calendar event |
+| **B. OutSystems mobile and desktop recorder app** | **Make** | Our own stack. Pick the calendar event (Graph) for title and attendees, consent checkbox, offline recording with upload later, tags and project picker at the start. The same app can host a **review/approve screen** before commit | 3–6 weeks of OutSystems work. Needs an audio-capture plugin/Forge component and background-recording handling on iOS |
+| **C. Buy a botless recorder app** (e.g. **jamie**: desktop and mobile, EU-hosted, multilingual incl. Dutch) | **Buy** | Polished UX, also works for Teams, good summaries out of the box | Per-seat cost (about €15–30/user/month, verify). Still needs webhook/export → router to reach Git and Plane. Another processor to manage under AVG |
+| **D. Buy hardware** (e.g. **Plaud NotePin/Note**) | **Buy** | Great for field and store visits and long in-person sessions, one button | Device plus subscription. Export through their app, integration is weaker. Check where data is stored |
 
-### Option M1: Make it end to end
+**Recommendation:** start with **A** in the pilot (near-zero cost). Build **B** in OutSystems once we know what people actually need (calendar-linked, consent, tags). Consider **C** only if the UX of A/B isn't good enough.
 
-Build our own pipeline.
+### 4.3 Transcription engine (offline audio, and fallback for Teams)
 
-- **Capture:** Microsoft Graph API (Teams `callRecording` / `callTranscript` change notifications), Zoom cloud-recording webhooks, Google Meet REST API. Or buy only the capture layer from **Recall.ai**, a meeting-bot API for all platforms. That's the only really hard part to build.
-- **Transcribe:** Azure AI Speech (EU region), Deepgram, AssemblyAI (EU endpoint), or self-hosted Whisper large-v3 + pyannote for diarization. Or use the platform's own transcript for free.
-- **Summarize:** Claude (Anthropic API) with a Yeaz prompt template and structured JSON output (decisions, action items, tags). Long-context models handle 2h+ transcripts in a single pass.
-- **Offload:** a small service (Azure Function / AWS Lambda / n8n) that writes to the Notion, Confluence, or Graph API, uploads the raw file to Blob/S3 with a lifecycle rule, and creates tasks.
-- **Q&A:** connect the KB to Claude (via a connector/MCP) so people can ask "what did we decide with supplier X in Q3?"
+| Engine | Notes |
+|---|---|
+| **Azure AI Speech – batch transcription** | ✅ Default. Azure-native, EU region, `nl-NL` and `en-US`, diarization, language identification. *Risk:* switching between Dutch and English mid-sentence. Test with real Yeaz recordings |
+| Whisper (Azure OpenAI or self-hosted `large-v3`) | Strong on mixed-language speech. Use it as a benchmark and fallback. Diarization needs extra work (e.g. pyannote) |
+| Deepgram / AssemblyAI / ElevenLabs Scribe | Buy-API alternatives with strong multilingual support. Only if Azure fails the benchmark, and check EU endpoints and the DPA |
 
-Indicative running cost at about 400 meeting hours/month: STT ~€0.25–0.50/h, LLM ~€0.05–0.30 per meeting, Recall.ai ~$0.50–1/h if used. That's **low hundreds of euros per month**, far below per-seat SaaS. The real cost is **build (4–8 engineer-weeks) plus ongoing ownership**: API changes, bot reliability, security reviews.
+Run a **benchmark** in phase 1: 10 real recordings (Dutch, English, mixed, a noisy room). Score word error rate on a few minutes of each, plus speaker accuracy.
 
-### Option H1: Hybrid (buy capture, make the KB layer) ⭐ recommended
+### 4.4 Summarization
 
-```
-Teams Premium / jamie / tl;dv / Fireflies   ──webhook/API──▶   "Yeaz Meeting Router"   ──▶  KB
-   (capture + transcript + basic summary)                     (Claude + Yeaz template,     (+ storage TTL,
-                                                               tagging, routing, ACLs)       tasks, Q&A)
-```
+| Option | Notes |
+|---|---|
+| **Claude** via **Microsoft Foundry** (Azure) or the Anthropic API | ✅ Long context handles 2h+ transcripts in one pass, strong Dutch/English, reliable structured JSON output. Foundry keeps billing and governance in Azure (check region and model availability). In both cases, contractually no training on our data |
+| Azure OpenAI | Also viable in the same Azure setup. Pick based on a quality test on our template |
 
-- **Buy** capture and transcription. Choose one vendor based on A1/A3: Teams Premium if we're Teams-only, jamie if we're German-first with in-person meetings, tl;dv/Fireflies if we're multi-platform and bot-OK.
-- **Make** a thin router (about 1–3 engineer-weeks, or a low-code n8n/Power Automate flow) that:
-  1. receives the "transcript ready" webhook,
-  2. re-summarizes with **our** template and taxonomy (project/team/customer tags, decision log format),
-  3. files the page in the **right KB space**, with permissions matching the attendees,
-  4. moves the raw recording to our storage and deletes it at the vendor after X days,
-  5. pushes action items to the task tool.
-- **Why:** we avoid building the fragile part (bots and recording) and own the part that makes the KB valuable (structure, consistency, portability). If we switch notetaker vendors later, only the input adapter changes. The KB format and history stay the same.
+Cost is roughly €0.05–0.30 per meeting, which is negligible.
 
----
+### 4.5 Second-brain and Plane integration
 
-## 5. Make vs. buy scorecard
-
-Scores are 1 (poor) to 5 (great), and weights add to 100%.
-
-| Criterion | Weight | B1 Native | B2 Notetaker | M1 Make | **H1 Hybrid** |
-|---|---:|:-:|:-:|:-:|:-:|
-| Time to value | 20% | 5 | 5 | 2 | 4 |
-| KB integration and structure fit | 20% | 2–4* | 3 | 5 | **5** |
-| GDPR / EU residency / works council | 15% | 5 | 3–5** | 5 | 4–5 |
-| German transcription quality | 10% | 4 | 4–5 | 4 | 4–5 |
-| Cross-platform + in-person | 10% | 2 | 4–5 | 3 | 4–5 |
-| Total cost (3 yr, ~50 users) | 15% | 2 | 3 | 4 | 3–4 |
-| Maintenance burden | 10% | 5 | 5 | 1 | 4 |
-| **Weighted (midpoint)** | | **~3.6** | **~3.9** | **~3.5** | **~4.3** |
-
-\* 4 if the KB is SharePoint, 2 if Notion/Confluence.
-\** 5 for EU vendors (jamie, tl;dv), 3 for US-default vendors without an EU region.
+**Make. There's no off-the-shelf product for this.** It's the core of the router:
+- **GitHub App** with `contents:write` on the second-brain repo only. The token lives in Key Vault.
+- Two modes, set per team:
+  - **Direct commit** to `main` (fast, `status: draft` in frontmatter until someone reviews it)
+  - **Pull request** per meeting (the organizer reviews and merges, which fits a Git KB well)
+- Obsidian users receive notes through their existing sync (e.g. the obsidian-git plugin or `git pull`).
+- **Plane**: `POST /api/v1/workspaces/{slug}/projects/{project_id}/intake-issues/` (or plain issues). Map owners by email to Plane members, fill in the due date, and put a backlink to the note in the description.
 
 ---
 
-## 6. Compliance checklist (Germany/EU): do this before any pilot
+## 5. Scorecard (updated)
 
-- [ ] **Consent:** under §201 StGB, recording the non-public spoken word without consent is a criminal offense. Use an automatic recording notice in the invite, an in-call banner, and an easy opt-out. External participants must be informed as well.
-- [ ] **Works council:** recording and AI tools that could monitor behavior or performance need works council co-determination (BetrVG §87(1) Nr. 6). Agree a Betriebsvereinbarung covering purpose limitation, no performance evaluation, and access rules.
-- [ ] **GDPR:** a DPA (AVV) with every vendor, EU data residency, sub-processor list, an entry in the processing register (VVT), and a DPIA (DSFA). A DPIA is likely required for systematic recording.
-- [ ] **No training on our data:** contractually excluded for both the notetaker vendor and the LLM provider.
-- [ ] **Retention:** raw audio/video 30–90 days, transcripts 12–24 months, summaries/decisions per KB policy. Enforce with automatic deletion.
-- [ ] **Scope exclusions:** no recording of HR, medical, legal, or performance meetings. Default to OFF for 1:1s.
-- [ ] **Access:** a KB page inherits the attendee list, and sensitive tags restrict visibility.
+Scores are 1 (poor) to 5 (great).
 
----
+| Criterion | Weight | Buy all (Copilot / jamie) | **Make on Azure (Teams-native + router)** | Make + bought offline app |
+|---|---:|:-:|:-:|:-:|
+| Lands in Git/Obsidian + Plane | 25% | 1 (needs router anyway) | **5** | 5 |
+| Dutch/English quality | 15% | 4–5 | 4 (benchmark) | 4–5 |
+| Offline capture UX | 15% | 5 | 3 (A) → 4 (B) | 5 |
+| AVG / EU / OR | 15% | 3–4 | **5** (stays in our tenant) | 4 |
+| Cost (3 yr, ~50 users) | 15% | 2 | **5** | 3 |
+| Time to value | 10% | 4 | 3 | 3 |
+| Maintenance | 5% | 5 | 3 | 3 |
+| **Weighted (midpoint)** | | **~3.1** | **~4.3** | **~4.2** |
 
-## 7. Rollout plan
-
-| Phase | Duration | Content |
-|---|---|---|
-| **0. Decide** | 1 week | Confirm A1–A5. Brief DPO and works council. Shortlist two vendors |
-| **1. Pilot** | 3–4 weeks | 10–15 users across 2 teams. Two vendors head to head, e.g. Teams Premium vs. jamie or tl;dv. Manual KB filing to validate the template |
-| **2. Router MVP** | 2–3 weeks (parallel) | Webhook → Claude summary with the Yeaz template → KB page + storage TTL. Low-code first (n8n / Power Automate), code if needed |
-| **3. Rollout** | 4 weeks | Company-wide. Betriebsvereinbarung signed. Training and a "how we record" one-pager |
-| **4. Extend** | Ongoing | Action items → task tool, KB Q&A via Claude, partner calls → CRM |
-
-**Pilot success metrics**
-- ≥80% of recorded meetings reach the KB automatically within 15 minutes
-- German transcript word error rate is acceptable (spot-check 10 meetings) and speaker attribution is ≥90% correct
-- Users rate summary usefulness ≥4/5 and save ≥10 minutes per meeting
-- Zero consent or compliance incidents
+**Conclusion:** mostly **make**, on the Azure/OutSystems stack we already run. The only real buy decision left is the offline recorder UX, and we can defer it.
 
 ---
 
-## 8. Yeaz summary template (draft, used by the router)
+## 6. Note format in the second brain
+
+Path: `Meetings/2026/10/2026-10-02-supplier-review-acme.md`
 
 ```markdown
-# {Meeting title} — {date}
-**Attendees:** … | **Type:** internal / partner / customer | **Tags:** #project #team
-## TL;DR (3 bullets)
+---
+type: meeting
+date: 2026-10-02
+start: "10:00"
+duration_min: 45
+source: teams            # teams | offline-inbox | offline-app
+language: nl             # nl | en | mixed
+title: Supplier review Acme
+attendees: ["[[Jan de Vries]]", "[[Marcel]]", "[[Sara Jansen]]"]
+projects: ["[[Project Packaging 2027]]"]
+tags: [meeting, supplier, packaging]
+status: draft            # draft | reviewed
+plane_issues: [YEAZ-412, YEAZ-413]
+transcript: "[[2026-10-02-supplier-review-acme.transcript]]"
+recording: "https://…blob…/raw/…"   # expires 2026-12-31
+---
+
+# Supplier review Acme — 2026-10-02
+
+## TL;DR
+- …
+
 ## Decisions
-- [D1] … (decided by …)
+- [D1] … (decided by [[Marcel]])
+
 ## Action items
-- [ ] … — @owner — due YYYY-MM-DD
+- [ ] … — [[Sara Jansen]] — due 2026-10-09 — Plane YEAZ-412
+
 ## Open questions / risks
-## Key numbers mentioned
-## Links
-- Transcript · Recording (expires YYYY-MM-DD)
+- …
+
+## Key numbers
+- …
 ```
+
+- The **full transcript** goes next to the note as `*.transcript.md`, or in a separate private repo or folder if some meetings are sensitive. Text is small and git handles it fine.
+- **Audio/video: never in git.** Blob with a lifecycle rule. The link expires when the file is deleted.
+- The router gives Claude the list of existing `People/` and `Projects/` note names so the wikilinks resolve. Unknown people become plain text rather than new empty notes.
 
 ---
 
-## 9. Recommendation and next steps
+## 7. Compliance checklist (Netherlands / EU)
 
-1. **Go with H1 (Hybrid):** buy capture and transcription, and build the thin KB router ourselves.
-2. **Vendor choice depends on A1:**
-   - Teams-only and SharePoint KB: **Teams Premium/Copilot** + router (router may be optional)
-   - German-first, many in-person meetings: **jamie** + router
-   - Multi-platform, Notion KB: **tl;dv** or **Notion AI Meeting Notes** + router
-3. **This week:** confirm A1–A5, send the DPO/works council brief, book a pilot with the top two vendors, and scaffold the router (webhook → Claude → KB).
+- [ ] **Transparency and consent (AVG):** recording involves personal data. Define the lawful basis (usually legitimate interest, and consent for external parties), announce it in the invite and at the start of the meeting, and give an easy opt-out. The Teams recording banner covers online meetings. For offline recordings, the recorder app or the organizer must say it out loud.
+- [ ] **Works council (OR):** a system that can monitor employees' behaviour or performance needs **OR consent under WOR art. 27(1)(l)**. Agree purpose limitation (no performance evaluation), access rules and retention.
+- [ ] **DPIA:** very likely required for systematic recording and transcription. Register it in the processing register.
+- [ ] **Processors:** DPAs (verwerkersovereenkomsten) with Microsoft (already in place), the LLM provider, and any bought app. EU processing, no training on our data.
+- [ ] **Retention:** audio 30–90 days (automatic deletion), transcripts 12–24 months, summaries and decisions per KB policy.
+- [ ] **Scope exclusions:** no HR, medical, legal or performance conversations. 1:1s are off by default. A `confidential` tag routes the note to a restricted repo or folder.
+- [ ] **Access:** second-brain repo permissions are all-or-nothing per repo. Decide whether a single repo is acceptable, or add a `second-brain-restricted` repo for sensitive meetings.
 
-### Open questions for Marcel
-- Which KB (Notion, Confluence, SharePoint, other) and which meeting platform(s)?
-- Headcount recording meetings, and share of external/partner calls?
-- Is there engineering capacity for about 2 weeks of router work, or should it be low-code only?
+---
+
+## 8. Build plan and effort
+
+| Phase | Duration | Deliverable |
+|---|---|---|
+| **0. Decide** | 1 week | Brief the privacy officer and OR, DPIA started, Entra app registration + Graph permissions approved, GitHub App created, Plane API token |
+| **1. Pilot (offline via Inbox + Teams via Graph)** | 3–4 weeks | Azure Functions router: Graph transcript fetch, OneDrive Inbox trigger, Azure Speech batch, Claude summary, commit to the repo (PR mode), Plane Intake issues. Transcription benchmark (Azure vs. Whisper). 10–15 pilot users |
+| **2. Harden** | 2 weeks | Direct-commit mode, retention rules, restricted-repo routing, Teams notification card, monitoring (App Insights), retries/dead-letter |
+| **3. OutSystems recorder + review app** | 3–6 weeks (optional, parallel) | Calendar-linked recording, consent capture, offline upload, "approve and publish" screen |
+| **4. Extend** | Ongoing | "Ask the second brain" (Claude over the repo), weekly decision digest, cross-meeting action-item follow-up |
+
+**Rough effort:** router MVP about 3–4 engineer-weeks (Azure/TypeScript or C#). OutSystems app 3–6 weeks.
+**Rough run cost at about 400 meeting hours/month:** Azure Speech about €150–300, LLM about €20–100, Functions and storage under €50. That's **roughly €250–450/month in total**, versus €750–1,500/month for per-seat SaaS for 50 users, which would still need the router.
+
+**Pilot success metrics**
+- ≥90% of recorded meetings produce a note in the repo within 15 minutes (Teams) or 30 minutes (offline)
+- Transcription quality is acceptable for Dutch, English and mixed speech (benchmark), with speaker attribution ≥90% correct
+- ≥80% of generated action items are accepted in Plane Intake without major edits
+- Users rate summaries ≥4/5
+- Zero privacy incidents, and OR agreement in place before rollout
+
+---
+
+## 9. Recommendation
+
+1. **Make**, on the stack we already have: Teams-native transcription via Graph, Azure AI Speech for offline audio, Claude for summaries, and an Azure Functions "Meeting Router" that commits Markdown to the second-brain repo and creates Plane Intake issues.
+2. **Offline capture:** start with the OneDrive "Meeting Inbox" drop folder, then build a small **OutSystems recorder app** (calendar-linked, consent, offline upload, review screen). Keep **jamie/Plaud** as a buy fallback if the UX falls short.
+3. **Don't buy** a cross-platform notetaker or Copilot for this use case. They don't reach Git or Plane, and they add cost and another processor under AVG.
+4. **Next steps this week:** OR and privacy officer briefing, Graph permission request, collect 10 sample recordings for the Dutch/English benchmark, scaffold the router repo.
+
+### Open questions
+- One second-brain repo for everything, or a separate restricted repo for confidential meetings?
+- Summary language: always English, always Dutch, or match the meeting?
+- Commit mode: direct to `main` with `status: draft`, or a PR per meeting?
+- Should Teams recording or transcription be on by default for everyone, or only for certain meeting types or teams?
+- Router language: TypeScript or C# (whatever the Azure team prefers)?
